@@ -6,7 +6,7 @@ This project aims to reproduce the core ideas from UAP_VLP GitHub repository on 
 - **Hardware:** Apple Silicon (M4 Pro, 2024)
 
 ## Dataset Setup
-Download the Flickr30k dataset and place the images in the following directory: `./flickr30k/Images`
+Download the Flickr30k dataset https://github.com/awsaf49/flickr-dataset/releases and place the images in the following directory: `./flickr30k/Images`
 Ensure the dataset is properly extracted before running the project.
 
 ## Environment Setup
