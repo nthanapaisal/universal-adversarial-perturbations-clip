@@ -8,30 +8,8 @@ import random
 
 IMAGE_DIR_FLICKR = "Flickr30k/Images"
 IMAGE_DIR_COCO = "MSCOCO/"
-
-PROMPTS = [
-    "a photo of a person",
-    "a portrait of a person",
-    "a person standing outdoors",
-    "a person indoors",
-    "a photo of an animal",
-    "a dog or other animal",
-    "a photo of a car or vehicle",
-    "a vehicle on a road",
-    "a street scene",
-    "a city scene",
-    "a natural landscape",
-    "an outdoor scene",
-    "an indoor scene",
-    "a group of people",
-    "a close-up object photo",
-]
-
-MAX_IMAGES = 100
-EPS = 10 / 255.0 # after all iterations, each pixel is guaranteed to change by at most ~3%
-STEPS = 20
-LR = 1 / 255.0 # Each step changes pixels by exactly 1/255
-
+TOTAL_IMAGES = 450
+MAX_IMAGES_PER_SET = 150
 
 def get_device():
     if torch.backends.mps.is_available():
@@ -40,10 +18,13 @@ def get_device():
         return torch.device("cuda")
     return torch.device("cpu")
 
+# get device of this machine
+DEVICE = get_device()
+print("Using device:", DEVICE)
 
-def load_images(image_dir, preprocess, device):
+def load_images(image_dir, preprocess):
     # load image from paths, convert ot RGB, preprocess before append to list
-    paths = random.sample(list(Path(image_dir).glob("*.jpg")), 200) # finds all .jpg files in the directory # [img_idx:img_idx+MAX_IMAGES]
+    paths = random.sample(list(Path(image_dir).glob("*.jpg")), TOTAL_IMAGES) 
     if not paths:
         raise ValueError(f"No .jpg images found in {image_dir}")
 
@@ -66,13 +47,13 @@ def load_images(image_dir, preprocess, device):
         # ])
 
     # turn list of tensors into tensor structure "batch tensor" with all img tensors in it.  -> [BATCH_SIZE, CHANNELS, HEIGHT, WIDTH]
-    images = torch.stack(imgs).to(device)
+    images = torch.stack(imgs).to(DEVICE)
     return images, paths
 
 
 @torch.no_grad() # do not track gradients inside this func
-def encode_text(model, tokenizer, device):
-    tokens = tokenizer(PROMPTS).to(device) #tokenize strings and send to mps
+def encode_text(model, tokenizer, prompts):
+    tokens = tokenizer(prompts).to(DEVICE) #tokenize strings and send to mps
     text_features = model.encode_text(tokens) #pass tokens to clip
     text_features = F.normalize(text_features, dim=-1)
     return text_features
@@ -86,8 +67,15 @@ def eval_sim(model, images, text_features):
     best_scores, best_idx = sims.max(dim=1) # highest similarity, which text matched best
     return best_scores.mean().item(), best_idx # average similarity across all images, item() convert tensor to float
 
-def train_clipuap(device):
-    print("Testing CLIPUAP: FLICKR")
+def check_result(clean_mean, adv_mean, clean_idx, adv_idx):
+    changed = (clean_idx != adv_idx).sum().item()
+
+    print("\nResults:")
+    print(f"Clean similarity:  {clean_mean:.4f}")
+    print(f"Attack similarity: {adv_mean:.4f}")
+    print(f"Changed predictions: {changed}/{MAX_IMAGES_PER_SET}")
+
+def train_clipuap(eps, steps, lr, prompts):
     # get model: clip - resnet-50 backbone for img and transformer for txt, uses open ai weights
     # preprocess is function prepare raw image for clip model
     model, _, preprocess = open_clip.create_model_and_transforms(
@@ -97,7 +85,7 @@ def train_clipuap(device):
     tokenizer = open_clip.get_tokenizer("RN50") # rn50 does not mean tokenizer for rn50 but for clip with backbone rn50
 
     # move all model weights to that device
-    model = model.to(device)
+    model = model.to(DEVICE)
 
     # tell model we are inferencing mode
     model.eval()
@@ -106,22 +94,23 @@ def train_clipuap(device):
     for p in model.parameters():
         p.requires_grad_(False)
 
-    # load image
-    images, paths = load_images(IMAGE_DIR_FLICKR, preprocess, device)
-    images_train = images[:MAX_IMAGES]
-    images_test = images[MAX_IMAGES:MAX_IMAGES + MAX_IMAGES]
-
+    # load images
+    images, paths = load_images(IMAGE_DIR_FLICKR, preprocess)
+    images_train = images[:MAX_IMAGES_PER_SET]
+    images_test_set_1 = images[MAX_IMAGES_PER_SET:MAX_IMAGES_PER_SET*2]
+    images_test_set_2 = images[MAX_IMAGES_PER_SET*2:MAX_IMAGES_PER_SET*3]
+    
     # embedding txt and normalize 
-    text_features = encode_text(model, tokenizer, device)
+    text_features = encode_text(model, tokenizer, prompts)
 
     # baseline
     clean_mean, clean_idx = eval_sim(model, images_train, text_features)
     print(f"Clean similarity: {clean_mean:.4f}")
 
     # a trainable noise tensor that will be added to every image
-    delta = torch.zeros_like(images_train[:1], device=device, requires_grad=True) # grad tracks delta → adv → model → embeddings → loss
+    delta = torch.zeros_like(images_train[:1], device=DEVICE, requires_grad=True) # grad tracks delta → adv → model → embeddings → loss
 
-    for step in tqdm(range(STEPS)):
+    for step in tqdm(range(steps)):
         #CREATE ADVERSARIAL IMAGE RANGE[0,1], forces every value in x to stay within [min, max]
         adv = torch.clamp(images_train + delta, 0, 1)  
         # reencode adversarial image
@@ -139,98 +128,58 @@ def train_clipuap(device):
         grad = torch.autograd.grad(loss, delta)[0]
         # update noise
         with torch.no_grad(): # Do not track gradients while manually editing delta, parameter update step
-            delta -= LR * grad.sign() #So each pixel moves by a fixed small amount in the direction that changes the loss.
-            delta.clamp_(-EPS, EPS) #limits the perturbation size becasue the noise might grow huge and become obvious.
+            delta -= lr * grad.sign() #So each pixel moves by a fixed small amount in the direction that changes the loss.
+            delta.clamp_(-eps, eps) #limits the perturbation size becasue the noise might grow huge and become obvious.
 
         if step % 5 == 0:
             print(f"step {step} loss {loss.item():.4f}")
 
-    # final inference using final delta to trick 
+    # final inference
     with torch.no_grad():
-        adv = torch.clamp(images_test + delta, 0, 1)
+        # same train sert
+        adv = torch.clamp(images_train + delta, 0, 1)
         adv_mean, adv_idx = eval_sim(model, adv, text_features)
 
-    changed = (clean_idx != adv_idx).sum().item()
+        check_result(clean_mean, adv_mean, clean_idx, adv_idx)
 
-    print("\nResults:")
-    print(f"Clean similarity:  {clean_mean:.4f}")
-    print(f"Attack similarity: {adv_mean:.4f}")
-    print(f"Changed predictions: {changed}/{MAX_IMAGES}")
-
-def train_clipuap_coco(device):
-    print("Testing CLIPUAP: COCO")
-    # get model: clip - resnet-50 backbone for img and transformer for txt, uses open ai weights
-    # preprocess is function prepare raw image for clip model
-    model, _, preprocess = open_clip.create_model_and_transforms(
-        "RN50", pretrained="openai"
-    )
-    # need tokenizaer for text encoder: string -> token ids
-    tokenizer = open_clip.get_tokenizer("RN50") # rn50 does not mean tokenizer for rn50 but for clip with backbone rn50
-
-    # move all model weights to that device
-    model = model.to(device)
-
-    # tell model we are inferencing mode
-    model.eval()
-
-    # freeze model weights because .eval() does not stop gradients
-    for p in model.parameters():
-        p.requires_grad_(False)
-
-    # load image
-    images, paths = load_images(IMAGE_DIR_COCO, preprocess, device)
-    images_train = images[:MAX_IMAGES]
-    images_test = images[MAX_IMAGES:MAX_IMAGES + MAX_IMAGES]
-
-    text_features = encode_text(model, tokenizer, device)
-
-    clean_mean, clean_idx = eval_sim(model, images_train, text_features)
-    print(f"Clean similarity: {clean_mean:.4f}")
-
-    delta = torch.zeros_like(images_train[:1], device=device, requires_grad=True) 
-
-    for step in tqdm(range(STEPS)):
-
-        adv = torch.clamp(images_train + delta, 0, 1)  
-
-        image_features = model.encode_image(adv)
-        image_features = F.normalize(image_features, dim=-1)
-
-        sims = image_features @ text_features.T
-
-        best_scores, _ = sims.max(dim=1)
-        
-        loss = best_scores.mean()
-
-        grad = torch.autograd.grad(loss, delta)[0]
-
-        with torch.no_grad(): 
-            delta -= LR * grad.sign() 
-            delta.clamp_(-EPS, EPS)
-
-        if step % 5 == 0:
-            print(f"step {step} loss {loss.item():.4f}")
-
-    # final inference using final delta to trick 
-    with torch.no_grad():
-        adv = torch.clamp(images_test + delta, 0, 1)
+        # test sets
+        clean_mean, clean_idx = eval_sim(model, images_test_set_1, text_features)
+        adv = torch.clamp(images_test_set_1 + delta, 0, 1)
         adv_mean, adv_idx = eval_sim(model, adv, text_features)
+        check_result(clean_mean, adv_mean, clean_idx, adv_idx)
 
-    changed = (clean_idx != adv_idx).sum().item()
-
-    print("\nResults:")
-    print(f"Clean similarity:  {clean_mean:.4f}")
-    print(f"Attack similarity: {adv_mean:.4f}")
-    print(f"Changed predictions: {changed}/{MAX_IMAGES}")
+        clean_mean, clean_idx = eval_sim(model, images_test_set_2, text_features)
+        adv = torch.clamp(images_test_set_2 + delta, 0, 1)
+        adv_mean, adv_idx = eval_sim(model, adv, text_features)
+        check_result(clean_mean, adv_mean, clean_idx, adv_idx)
 
 
 def main():
-    # get device of this machine
-    device = get_device()
-    print("Using device:", device)
+    PROMPTS = [
+    "a photo of a person",
+    "a portrait of a person",
+    "a person standing outdoors",
+    "a person indoors",
+    "a photo of an animal",
+    "a dog or other animal",
+    "a photo of a car or vehicle",
+    "a vehicle on a road",
+    "a street scene",
+    "a city scene",
+    "a natural landscape",
+    "an outdoor scene",
+    "an indoor scene",
+    "a group of people",
+        "a close-up object photo",
+    ]
 
-    train_clipuap(device)
-    #train_clipuap_coco(device)
+    EPS = 10 / 255.0 # after all iterations, each pixel is guaranteed to change by at most ~3%
+    STEPS = 20
+    LR = 1 / 255.0 # Each step changes pixels by exactly 1/255
 
+    
+    print("Testing CLIPUAP: FLICKR")
+    train_clipuap(EPS, STEPS, LR, PROMPTS)
+    
 if __name__ == "__main__":
     main()
