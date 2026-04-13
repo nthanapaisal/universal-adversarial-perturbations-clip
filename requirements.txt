@@ -1,5 +1,6 @@
 torch
 torchvision
 open-clip-torch
-Pillow
+pillow
 tqdm
+matplotlib

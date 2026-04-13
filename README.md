@@ -11,9 +11,12 @@ Ensure the dataset is properly extracted before running the project.
 
 ## Environment Setup
 ` conda create -n clipuap python=3.11 -y `
+
 ` conda activate clipuap ` 
+
 ` python -m pip install -U pip `
-` pip inistall -r requirements.txt ` 
+
+` pip install -r requirements.txt ` 
 
 ## Run
 `python train_uap.py`
