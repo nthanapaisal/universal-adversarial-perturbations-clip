@@ -8,8 +8,10 @@ import random
 
 IMAGE_DIR_FLICKR = "Flickr30k/Images"
 IMAGE_DIR_COCO = "MSCOCO/"
-TOTAL_IMAGES = 450
-MAX_IMAGES_PER_SET = 150
+TOTAL_IMAGES = 3000
+TRAINING_SIZE = 2000
+BATCH_SIZE = 100
+TESTING_SIZE = 1000
 
 def get_device():
     if torch.backends.mps.is_available():
@@ -47,8 +49,7 @@ def load_images(image_dir, preprocess):
         # ])
 
     # turn list of tensors into tensor structure "batch tensor" with all img tensors in it.  -> [BATCH_SIZE, CHANNELS, HEIGHT, WIDTH]
-    images = torch.stack(imgs).to(DEVICE)
-    return images, paths
+    return imgs, paths
 
 
 @torch.no_grad() # do not track gradients inside this func
@@ -67,13 +68,51 @@ def eval_sim(model, images, text_features):
     best_scores, best_idx = sims.max(dim=1) # highest similarity, which text matched best
     return best_scores.mean().item(), best_idx # average similarity across all images, item() convert tensor to float
 
-def check_result(clean_mean, adv_mean, clean_idx, adv_idx):
-    changed = (clean_idx != adv_idx).sum().item()
+def eval_full_set(model, images_list, text_features, delta, batch_size):
+    clean_scores_all = []
+    adv_scores_all = []
+    clean_idx_all = []
+    adv_idx_all = []
+
+    with torch.no_grad():
+        for i in range(0, len(images_list), batch_size):
+            batch_imgs = images_list[i:i + batch_size]
+            batch = torch.stack(batch_imgs).to(DEVICE)
+
+            # clean
+            image_features = model.encode_image(batch)
+            image_features = F.normalize(image_features, dim=-1)
+            sims = image_features @ text_features.T
+            clean_scores, clean_idx = sims.max(dim=1)
+
+            # adversarial
+            adv = torch.clamp(batch + delta, 0, 1)
+            adv_features = model.encode_image(adv)
+            adv_features = F.normalize(adv_features, dim=-1)
+            adv_sims = adv_features @ text_features.T
+            adv_scores, adv_idx = adv_sims.max(dim=1)
+
+            clean_scores_all.append(clean_scores.cpu())
+            adv_scores_all.append(adv_scores.cpu())
+            clean_idx_all.append(clean_idx.cpu())
+            adv_idx_all.append(adv_idx.cpu())
+
+    clean_scores_all = torch.cat(clean_scores_all)
+    adv_scores_all = torch.cat(adv_scores_all)
+    clean_idx_all = torch.cat(clean_idx_all)
+    adv_idx_all = torch.cat(adv_idx_all)
+
+    clean_mean = clean_scores_all.mean().item()
+    adv_mean = adv_scores_all.mean().item()
+
+    changed = (clean_idx_all != adv_idx_all).sum().item()
 
     print("\nResults:")
     print(f"Clean similarity:  {clean_mean:.4f}")
     print(f"Attack similarity: {adv_mean:.4f}")
-    print(f"Changed predictions: {changed}/{MAX_IMAGES_PER_SET}")
+    print(f"Changed predictions: {changed}/{len(images_list)}")
+
+    return clean_mean, adv_mean, clean_idx_all, adv_idx_all
 
 def train_clipuap(eps, steps, lr, prompts):
     # get model: clip - resnet-50 backbone for img and transformer for txt, uses open ai weights
@@ -94,65 +133,64 @@ def train_clipuap(eps, steps, lr, prompts):
     for p in model.parameters():
         p.requires_grad_(False)
 
-    # load images
-    images, paths = load_images(IMAGE_DIR_FLICKR, preprocess)
-    images_train = images[:MAX_IMAGES_PER_SET]
-    images_test_set_1 = images[MAX_IMAGES_PER_SET:MAX_IMAGES_PER_SET*2]
-    images_test_set_2 = images[MAX_IMAGES_PER_SET*2:MAX_IMAGES_PER_SET*3]
-    
     # embedding txt and normalize 
     text_features = encode_text(model, tokenizer, prompts)
 
-    # baseline
-    clean_mean, clean_idx = eval_sim(model, images_train, text_features)
-    print(f"Clean similarity: {clean_mean:.4f}")
+    # load images
+    images, paths = load_images(IMAGE_DIR_FLICKR, preprocess)
 
     # a trainable noise tensor that will be added to every image
-    delta = torch.zeros_like(images_train[:1], device=DEVICE, requires_grad=True) # grad tracks delta → adv → model → embeddings → loss
+    delta = torch.zeros((1, *images[0].shape), device=DEVICE, requires_grad=True) # grad tracks delta → adv → model → embeddings → loss
 
     for step in tqdm(range(steps)):
-        #CREATE ADVERSARIAL IMAGE RANGE[0,1], forces every value in x to stay within [min, max]
-        adv = torch.clamp(images_train + delta, 0, 1)  
-        # reencode adversarial image
-        image_features = model.encode_image(adv)
-        image_features = F.normalize(image_features, dim=-1)
-        # compute similarity
-        sims = image_features @ text_features.T
-        # best scores
-        best_scores, _ = sims.max(dim=1)
-        # take avg base score and make it loss (finding strong image-text matches) -trying to reduce CLIP’s confidence in the best matching text
-        # average of the best image-text similarity for the batch
-        # without txt we can do something like " image and original image loss (Example A: push embeddings away from original)"
-        loss = best_scores.mean()
-        # compute gradient respect to delta
-        grad = torch.autograd.grad(loss, delta)[0]
-        # update noise
-        with torch.no_grad(): # Do not track gradients while manually editing delta, parameter update step
-            delta -= lr * grad.sign() #So each pixel moves by a fixed small amount in the direction that changes the loss.
-            delta.clamp_(-eps, eps) #limits the perturbation size becasue the noise might grow huge and become obvious.
+        for batch_idx in range(0, TRAINING_SIZE, BATCH_SIZE):
+            print(f"Batch: {batch_idx}")
+            batch_imgs = images[batch_idx: batch_idx + BATCH_SIZE]
+            images_train = torch.stack(batch_imgs).to(DEVICE)
+            #CREATE ADVERSARIAL IMAGE RANGE[0,1], forces every value in x to stay within [min, max]
+            adv = torch.clamp(images_train + delta, 0, 1)  
+            # reencode adversarial image
+            image_features = model.encode_image(adv)
+            image_features = F.normalize(image_features, dim=-1)
+            # compute similarity
+            sims = image_features @ text_features.T
+            # best scores
+            best_scores, _ = sims.max(dim=1)
+            # take avg base score and make it loss (finding strong image-text matches) -trying to reduce CLIP’s confidence in the best matching text
+            # average of the best image-text similarity for the batch
+            # without txt we can do something like " image and original image loss (Example A: push embeddings away from original)"
+            loss = best_scores.mean()
+            # compute gradient respect to delta
+            grad = torch.autograd.grad(loss, delta)[0]
+            # update noise
+            with torch.no_grad(): # Do not track gradients while manually editing delta, parameter update step
+                delta -= lr * grad.sign() #So each pixel moves by a fixed small amount in the direction that changes the loss.
+                delta.clamp_(-eps, eps) #limits the perturbation size becasue the noise might grow huge and become obvious.
 
-        if step % 5 == 0:
+            
             print(f"step {step} loss {loss.item():.4f}")
 
-    # final inference
-    with torch.no_grad():
-        # same train sert
-        adv = torch.clamp(images_train + delta, 0, 1)
-        adv_mean, adv_idx = eval_sim(model, adv, text_features)
 
-        check_result(clean_mean, adv_mean, clean_idx, adv_idx)
+    ##### end of training noise #####
+    print("\nEvaluating on training set...")
+    train_images = images[:TRAINING_SIZE]
+    eval_full_set(
+        model=model,
+        images_list=train_images,
+        text_features=text_features,
+        delta=delta,
+        batch_size=BATCH_SIZE
+    )
 
-        # test sets
-        clean_mean, clean_idx = eval_sim(model, images_test_set_1, text_features)
-        adv = torch.clamp(images_test_set_1 + delta, 0, 1)
-        adv_mean, adv_idx = eval_sim(model, adv, text_features)
-        check_result(clean_mean, adv_mean, clean_idx, adv_idx)
-
-        clean_mean, clean_idx = eval_sim(model, images_test_set_2, text_features)
-        adv = torch.clamp(images_test_set_2 + delta, 0, 1)
-        adv_mean, adv_idx = eval_sim(model, adv, text_features)
-        check_result(clean_mean, adv_mean, clean_idx, adv_idx)
-
+    print("\nEvaluating on test set...")
+    test_images = images[TRAINING_SIZE: TRAINING_SIZE + TESTING_SIZE] #200 for both tests
+    eval_full_set(
+        model=model,
+        images_list=test_images,
+        text_features=text_features,
+        delta=delta,
+        batch_size=BATCH_SIZE
+    )
 
 def main():
     PROMPTS = [
@@ -174,7 +212,7 @@ def main():
     ]
 
     EPS = 10 / 255.0 # after all iterations, each pixel is guaranteed to change by at most ~3%
-    STEPS = 20
+    STEPS = 10
     LR = 1 / 255.0 # Each step changes pixels by exactly 1/255
 
     

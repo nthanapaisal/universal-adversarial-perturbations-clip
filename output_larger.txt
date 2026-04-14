@@ -1,0 +1,166 @@
+Using device: mps
+Testing CLIPUAP: FLICKR
+Batch: 0
+step 0 loss 0.1922
+Batch: 100
+step 0 loss 0.1949
+Batch: 200
+step 0 loss 0.1951
+Batch: 300
+step 0 loss 0.1921
+Batch: 400
+step 0 loss 0.1923
+Batch: 500
+step 0 loss 0.1912
+Batch: 600
+step 0 loss 0.1932
+Batch: 700
+step 0 loss 0.1912
+Batch: 800
+step 0 loss 0.1924
+Batch: 900
+step 0 loss 0.1914
+Batch: 1000
+step 0 loss 0.1905
+Batch: 1100
+step 0 loss 0.1902
+Batch: 1200
+step 0 loss 0.1931
+Batch: 1300
+step 0 loss 0.1928
+Batch: 1400
+step 0 loss 0.1895
+Batch: 0
+step 1 loss 0.1860
+Batch: 100
+step 1 loss 0.1892
+Batch: 200
+step 1 loss 0.1897
+Batch: 300
+step 1 loss 0.1864
+Batch: 400
+step 1 loss 0.1874
+Batch: 500
+step 1 loss 0.1859
+Batch: 600
+step 1 loss 0.1882
+Batch: 700
+step 1 loss 0.1865
+Batch: 800
+step 1 loss 0.1873
+Batch: 900
+step 1 loss 0.1867
+Batch: 1000
+step 1 loss 0.1863
+Batch: 1100
+step 1 loss 0.1856
+Batch: 1200
+step 1 loss 0.1889
+Batch: 1300
+step 1 loss 0.1883
+Batch: 1400
+step 1 loss 0.1851
+Batch: 0
+step 2 loss 0.1826
+Batch: 100
+step 2 loss 0.1859
+Batch: 200
+step 2 loss 0.1865
+Batch: 300
+step 2 loss 0.1832
+Batch: 400
+step 2 loss 0.1846
+Batch: 500
+step 2 loss 0.1831
+Batch: 600
+step 2 loss 0.1856
+Batch: 700
+step 2 loss 0.1838
+Batch: 800
+step 2 loss 0.1846
+Batch: 900
+step 2 loss 0.1840
+Batch: 1000
+step 2 loss 0.1835
+Batch: 1100
+step 2 loss 0.1832
+Batch: 1200
+step 2 loss 0.1862
+Batch: 1300
+step 2 loss 0.1859
+Batch: 1400
+step 2 loss 0.1826
+Batch: 0
+step 3 loss 0.1806
+Batch: 100
+step 3 loss 0.1839
+Batch: 200
+step 3 loss 0.1847
+Batch: 300
+step 3 loss 0.1815
+Batch: 400
+step 3 loss 0.1829
+Batch: 500
+step 3 loss 0.1814
+Batch: 600
+step 3 loss 0.1839
+Batch: 700
+step 3 loss 0.1821
+Batch: 800
+step 3 loss 0.1829
+Batch: 900
+step 3 loss 0.1819
+Batch: 1000
+step 3 loss 0.1819
+Batch: 1100
+step 3 loss 0.1814
+Batch: 1200
+step 3 loss 0.1846
+Batch: 1300
+step 3 loss 0.1841
+Batch: 1400
+step 3 loss 0.1809
+Batch: 0
+step 4 loss 0.1793
+Batch: 100
+step 4 loss 0.1824
+Batch: 200
+step 4 loss 0.1833
+Batch: 300
+step 4 loss 0.1798
+Batch: 400
+step 4 loss 0.1818
+Batch: 500
+step 4 loss 0.1800
+Batch: 600
+step 4 loss 0.1824
+Batch: 700
+step 4 loss 0.1806
+Batch: 800
+step 4 loss 0.1817
+Batch: 900
+step 4 loss 0.1807
+Batch: 1000
+step 4 loss 0.1807
+Batch: 1100
+step 4 loss 0.1799
+Batch: 1200
+step 4 loss 0.1832
+Batch: 1300
+step 4 loss 0.1829
+Batch: 1400
+step 4 loss 0.1797
+
+Evaluating on training set...
+
+Results:
+Clean similarity:  0.1859
+Attack similarity: 0.1787
+Changed predictions: 879/1500
+
+Evaluating on test set...
+
+Results:
+Clean similarity:  0.1872
+Attack similarity: 0.1902
+Changed predictions: 265/500
